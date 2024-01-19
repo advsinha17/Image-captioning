@@ -1,32 +1,28 @@
-import tensorflow as tf
+from transformers import AutoImageProcessor, SwinModel
+import torch
 import os
 import pickle
-os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"
+from PIL import Image
 
-INPUT_SIZE = (299, 299)
 CWD = os.path.dirname(__file__)
 
-def get_encodings(images_dir, model):
-    model.summary()
+def get_encodings(images_dir, image_size):
+    image_processor = AutoImageProcessor.from_pretrained("microsoft/swin-tiny-patch4-window7-224")
+    model = SwinModel.from_pretrained("microsoft/swin-tiny-patch4-window7-224")
     imgs_list = os.listdir(images_dir)
     encodings = {}
     for image_path in imgs_list:
-        img = tf.keras.preprocessing.image.load_img(os.path.join(images_dir, image_path), target_size=(INPUT_SIZE + (3,)))
-        img = tf.keras.preprocessing.image.img_to_array(img)
-        img = tf.expand_dims(img, axis = 0)
-        img = tf.keras.applications.inception_v3.preprocess_input(img)
-        encoding = model.predict(img)
-        encoding = tf.reshape(encoding, encoding.shape[1])
-        encodings[image_path] = encoding
+        with Image.open(os.path.join(images_dir, image_path)) as img:
+            img = img.resize(image_size)
+            img = image_processor(img, return_tensors="pt")
+            with torch.no_grad():
+                outputs = model(**img)
+            encoding = outputs.last_hidden_state
+            encodings[image_path] = encoding
     return encodings
 
 if __name__ == '__main__':
-    base_model = tf.keras.applications.InceptionV3(weights='imagenet', input_shape = (INPUT_SIZE + (3,)))
-    model = tf.keras.Model(base_model.input, base_model.layers[-2].output)
-    encodings = get_encodings(os.path.join(CWD, 'data/Images'), model)
-    with open(os.path.join(CWD, "encodings.pkl"), "wb") as f:
+    encodings = get_encodings(os.path.join(CWD, 'data/Images'), (224, 224))
+    with open(os.path.join(CWD, "encodings_swin.pkl"), "wb") as f:
         pickle.dump(encodings, f)
-
-
-
 
