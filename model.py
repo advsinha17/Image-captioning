@@ -2,7 +2,9 @@ import torch
 from torch import nn, Tensor
 import math
 import numpy as np
-from torchinfo import summary
+# from torchinfo import summary
+
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     
 class PositionalEncoding1D(nn.Module):
     def __init__(self, model_dim: int, sequence_length: int):
@@ -64,7 +66,7 @@ class MultiHeadAttention(nn.Module):
         attn_scores = torch.matmul(query, key.transpose(-2, -1))
 
         dk = key.size(-1)
-        scaled_attention_logits = attn_scores / torch.sqrt(torch.tensor([dk]).to('cuda'))
+        scaled_attention_logits = attn_scores / torch.sqrt(torch.tensor([dk]).to(device))
 
         if mask is not None:
             scaled_attention_logits += (mask * -1e9)
@@ -140,12 +142,12 @@ class DecoderBlock(nn.Module):
         self.dropout2 = nn.Dropout(dropout)
         self.dropout3 = nn.Dropout(dropout)
 
-    def forward(self, x: Tensor, enc_output: Tensor, src_mask: Tensor = None, tgt_mask: Tensor = None) -> Tensor:
-        attn_output1 = self.mha1(x, x, x, src_mask)
-        attn_output1 = self.dropout1(attn_output1)
+    def forward(self, x: Tensor, enc_output: Tensor, look_ahead_mask: Tensor = None, padding_mask: Tensor = None) -> Tensor:
+        attn_output1 = self.mha1(x, x, x, look_ahead_mask)
+        attn_output1 = self.dropout1(attn_output1)  
         x = self.layer_norm1(attn_output1 + x)
 
-        attn_output2 = self.mha2(x, enc_output, enc_output, tgt_mask)
+        attn_output2 = self.mha2(x, enc_output, enc_output, padding_mask)
         attn_output2 = self.dropout2(attn_output2)
         x = self.layer_norm2(attn_output2 + x)
 
@@ -192,13 +194,13 @@ class Decoder(nn.Module):
         ])
         self.dropout = nn.Dropout(dropout)
     
-    def forward(self, x: Tensor, enc_output: Tensor, src_mask: Tensor = None, tgt_mask: Tensor = None) -> Tensor:
+    def forward(self, x: Tensor, enc_output: Tensor, enc_mask: Tensor = None, look_ahead_mask: Tensor = None) -> Tensor:
         x = self.embedding(x)
-        x *= torch.sqrt(torch.Tensor([self.model_dim]).to('cuda'))
+        x *= torch.sqrt(torch.Tensor([self.model_dim]).to(device))
         x = self.pos_enc(x)
         x = self.dropout(x)
         for i in range(self.num_layers):
-            x = self.layers[i](x, enc_output, src_mask, tgt_mask)
+            x = self.layers[i](x, enc_output, enc_mask, look_ahead_mask)
         return x
     
 class TransformerModel(nn.Module):
@@ -210,9 +212,25 @@ class TransformerModel(nn.Module):
         self.decoder = Decoder(num_layers, model_dim, num_heads, feed_forward_dim, vocab_size, sequence_length, dropout)
         self.final_layer = nn.Linear(model_dim, vocab_size)
 
-    def forward(self, input: Tensor, target: Tensor, enc_mask: Tensor = None, src_mask: Tensor = None, tgt_mask: Tensor = None) -> Tensor:
+    def padding_mask(self, input):
+        input = (input == 0).float()
+        return input.unsqueeze(1).unsqueeze(2)
+
+    def look_ahead_mask(self, shape):
+        mask = 1 - torch.tril(torch.ones(shape, shape))
+        return mask
+    
+    def create_masks_decoder(self, target):
+        target = target.to(device)
+        dec_look_ahead_mask = self.look_ahead_mask(target.size(1)).to(device)
+        dec_padding_mask = self.padding_mask(target).to(device)
+        combined_mask = torch.max(dec_padding_mask, dec_look_ahead_mask)
+        return combined_mask
+
+    def forward(self, input: Tensor, target: Tensor, enc_mask: Tensor = None, src_mask: Tensor = None, tgt_mask: Tensor = None, test: bool = True) -> Tensor:
+        dec_input_mask = self.create_masks_decoder(target)
         enc_output = self.encoder(input, enc_mask)
-        dec_output = self.decoder(target, enc_output, src_mask, tgt_mask)
+        dec_output = self.decoder(target, enc_output, dec_input_mask, tgt_mask) if test else self.decoder(target, enc_output, src_mask, tgt_mask)
         output = self.final_layer(dec_output)
 
         return output
@@ -222,5 +240,5 @@ if __name__ == '__main__':
     inp = torch.randn(32, 49, 768)
     tgt = torch.randint(0, 8357, (32, 34))
     model = TransformerModel(512, 768, 8, 4, 8357, height = 7, width = 7)
-    summary(model, input_data=[inp, tgt])
+    # summary(model, input_data=[inp, tgt])
     out = model(inp, tgt)
