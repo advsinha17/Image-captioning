@@ -2,6 +2,8 @@ import string
 
 def preprocess_captions(data_path):
     caption_dict = {}
+    word_to_index = {"<pad>": 0, "<start>": 1, "<end>": 2}
+    index = 3 
 
     with open(data_path, 'r') as f:
         lines = f.readlines()
@@ -16,6 +18,11 @@ def preprocess_captions(data_path):
 
         caption = clean_caption(caption)
 
+        for word in caption.split():
+            if word not in word_to_index:
+                word_to_index[word] = index
+                index += 1
+
         caption = '<start> ' + caption + ' <end>'
 
         if image_name in caption_dict.keys():
@@ -23,7 +30,9 @@ def preprocess_captions(data_path):
         else:
             caption_dict[image_name] = [caption]
 
-    return caption_dict
+    index_to_word = {index: word for word, index in word_to_index.items()}
+
+    return caption_dict, word_to_index, index_to_word
 
 def clean_caption(caption):
     cleaned_caption = ""
